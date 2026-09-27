@@ -14,11 +14,12 @@ st.set_page_config(page_title="VoltDesk", page_icon="⚡️", layout="centered")
 TOKEN_TELEGRAM = "8972769309:AAG5Gf58EORFvPJ2J050onWJXSBKdyv-pPM"
 CHAT_ID_TELEGRAM = "8690664380"
 
-# Garante o caminho absoluto da pasta uploads para evitar erros de permissão na nuvem
+# Garante o caminho relativo correto dentro da estrutura do projeto na nuvem
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 DB_FILE = os.path.join(BASE_DIR, "chamados.db")
 
+# Garante criação da pasta no sistema de ficheiros em tempo de execução
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ==============================================================================
@@ -84,47 +85,48 @@ def enviar_notificacao(nome, bloco_apto, whatsapp, categoria, descricao, dia, tu
 <i>{descricao}</i>
 """
 
-    reply_markup = json.dumps({
-        "inline_keyboard": [[{"text": "💬 Abrir conversa no WhatsApp", "url": link_wa}]]
-    })
+    inline_keyboard = {"inline_keyboard": [[{"text": "💬 Abrir conversa no WhatsApp", "url": link_wa}]]}
+    reply_markup_json = json.dumps(inline_keyboard)
 
-    # Tenta enviar primeiro a foto/anexo se existir
     sucesso_envio = False
-    if caminho_foto and isinstance(caminho_foto, str) and os.path.exists(caminho_foto):
+
+    # Tentar enviar foto caso o ficheiro exista fisicamente
+    if caminho_foto and isinstance(caminho_foto, str) and os.path.isfile(caminho_foto):
         ext = caminho_foto.lower()
         if ext.endswith(('.jpg', '.png', '.jpeg')):
             try:
-                url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendPhoto"
+                url_photo = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendPhoto"
                 with open(caminho_foto, "rb") as photo_file:
+                    payload_data = {
+                        "chat_id": CHAT_ID_TELEGRAM,
+                        "caption": mensagem,
+                        "parse_mode": "HTML",
+                        "reply_markup": reply_markup_json
+                    }
                     res = requests.post(
-                        url,
-                        data={
-                            "chat_id": CHAT_ID_TELEGRAM,
-                            "caption": mensagem,
-                            "parse_mode": "HTML",
-                            "reply_markup": reply_markup
-                        },
+                        url_photo,
+                        data=payload_data,
                         files={"photo": photo_file},
-                        timeout=25
+                        timeout=45
                     )
                     if res.status_code == 200:
                         sucesso_envio = True
             except Exception:
                 sucesso_envio = False
 
-    # Se não houver foto ou se o envio da foto falhar, envia como mensagem simples de texto
+    # Fallback: Caso o envio da foto falhe ou não haja anexo
     if not sucesso_envio:
         try:
-            url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
-            payload = {
+            url_msg = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
+            payload_msg = {
                 "chat_id": CHAT_ID_TELEGRAM,
                 "text": mensagem,
                 "parse_mode": "HTML",
-                "reply_markup": json.loads(reply_markup)
+                "reply_markup": inline_keyboard
             }
-            requests.post(url, json=payload, timeout=15)
+            requests.post(url_msg, json=payload_msg, timeout=15)
         except Exception as e:
-            st.warning(f"Chamado registrado no sistema, porém o alerta do Telegram teve um aviso: {e}")
+            st.warning(f"Chamado salvo, mas ocorreu uma falha no envio do alerta para o Telegram: {e}")
 
 # ==============================================================================
 # INTERFACE STREAMLIT
@@ -171,16 +173,15 @@ if aba == "Abrir Chamado ":
             caminho_salvo = None
             if foto is not None:
                 try:
-                    # Nome único com timestamp para evitar conflitos de arquivos com nomes iguais
-                    nome_limpo = "".join([c for c in foto.name if c.isalnum() or c in (".", "_", "-")])
-                    filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{nome_limpo}"
-                    caminho_salvo = os.path.join(UPLOAD_DIR, filename)
+                    os.makedirs(UPLOAD_DIR, exist_ok=True)
+                    extensao = os.path.splitext(foto.name)[1].lower()
+                    nome_unico = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}{extensao}"
+                    caminho_salvo = os.path.join(UPLOAD_DIR, nome_unico)
                     
-                    # Gravação do arquivo em disco/servidor
                     with open(caminho_salvo, "wb") as f:
                         f.write(foto.getbuffer())
                 except Exception as e:
-                    st.error(f"Erro ao salvar arquivo de mídia: {e}")
+                    st.error(f"Erro ao salvar arquivo: {e}")
                     caminho_salvo = None
 
             with get_db() as conn:
