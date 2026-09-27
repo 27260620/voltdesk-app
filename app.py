@@ -1,250 +1,153 @@
-import os
+import streamlit as st
 import sqlite3
 import pandas as pd
 import requests
-import streamlit as st
-from datetime import datetime
+import os
 
-# ==============================================================================
-# CONFIGURAÇÕES INICIAIS & CREDENCIAIS
-# ==============================================================================
-st.set_page_config(page_title="VoltDesk", page_icon="⚡️", layout="centered")
+# Configuração da página
+st.set_page_config(page_title="VoltDesk - Chamados", page_icon="⚡", layout="centered")
 
-TOKEN_TELEGRAM = "8972769309:AAG5Gf58EORFvPJ2J050onWJXSBKdyv-pPM"
-CHAT_ID_TELEGRAM = "8690664380"
+# CSS Customizado: Oculta o indicador de execução e ajusta o visual
+st.markdown("""
+    <style>
+    div[data-testid="stStatusWidget"] {
+        visibility: hidden;
+    }
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    </style>
+""", unsafe_allow_html=True)
 
-UPLOAD_DIR = "uploads"
 DB_FILE = "chamados.db"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+UPLOADS_DIR = "uploads"
 
-# ==============================================================================
-# DICIONÁRIO DO FAROL DE CORES POR STATUS
-# ==============================================================================
-FAROL_STATUS = {
-    "Pendente": "⚫",
-    "Em Orçamento": "🔵",
-    "Agendado": "🟡",
-    "Concluído": "🟢",
-    "Cancelado": "🔴"
-}
+# Garante que a pasta de uploads existe na nuvem
+if not os.path.exists(UPLOADS_DIR):
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
 
-# ==============================================================================
-# BANCO DE DADOS (SQLITE)
-# ==============================================================================
-def get_db():
-    return sqlite3.connect(DB_FILE)
-
-@st.cache_resource
+# Função para inicializar o banco de dados
 def init_db():
-    with get_db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS chamados (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                nome TEXT NOT NULL,
-                bloco_apto TEXT NOT NULL,
-                whatsapp TEXT NOT NULL,
-                categoria TEXT NOT NULL,
-                descricao TEXT NOT NULL,
-                caminho_foto TEXT,
-                data_preferencial TEXT,
-                turno_preferencial TEXT,
-                status TEXT DEFAULT 'Pendente' CHECK (status IN ('Pendente', 'Em Orçamento', 'Agendado', 'Concluído', 'Cancelado')),
-                criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS chamados (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nome TEXT NOT NULL,
+            apto TEXT NOT NULL,
+            whatsapp TEXT NOT NULL,
+            servico TEXT NOT NULL,
+            descricao TEXT NOT NULL,
+            dia_pref TEXT,
+            turno_pref TEXT,
+            foto TEXT,
+            status TEXT DEFAULT '⚫ Pendente',
+            data_criacao DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
 init_db()
 
-# ==============================================================================
-# FUNÇÃO DE NOTIFICAÇÃO EM TEMPO REAL (TELEGRAM)
-# ==============================================================================
-def enviar_notificacao(nome, bloco_apto, whatsapp, categoria, descricao, dia, turno, id_chamado, caminho_foto=None):
-    if TOKEN_TELEGRAM == "SEU_TOKEN_DO_BOTFATHER_AQUI":
-        st.info("ℹ️ Para receber alertas no Telegram, preencha o TOKEN e CHAT_ID no código.")
+# Telegram Bot Credentials (ajuste se necessário)
+TOKEN_TELEGRAM = "8972769309:AAG5Gf58EORFvPJ2J050onWJXSBKdyv-pPM"
+CHAT_ID_TELEGRAM = "8690664380"
+
+def enviar_notificacao_telegram(nome, apto, servico, descricao):
+    if not TELEGRAM_TOKEN or "your_token" in TELEGRAM_TOKEN:
         return
-
-    num_limpo = "".join(filter(str.isdigit, whatsapp))
-    if not num_limpo.startswith("55"):
-        num_limpo = f"55{num_limpo}"
-    
-    link_wa = f"https://wa.me/{num_limpo}?text=Ol%C3%A1%20{nome}%2C%20recebi%20seu%20chamado%20%23{id_chamado}%20de%20{categoria}.%20Podemos%20agendar%3F"
-
-    mensagem = f"""
-⚡️ <b>NOVO CHAMADO NO CONDOMÍNIO!</b> ⚡️
-
- <b>ID:</b> #{id_chamado}
- <b>Morador:</b> {nome}
- <b>Local:</b> {bloco_apto}
- <b>Serviço:</b> {categoria}
- <b>Agendamento:</b> {dia} ({turno})
-
- <b>Descrição:</b>
-<i>{descricao}</i>
-    """
-
-    payload = {
-        "chat_id": CHAT_ID_TELEGRAM,
-        "caption": mensagem,
-        "text": mensagem,
-        "parse_mode": "HTML",
-        "reply_markup": {
-            "inline_keyboard": [[{"text": "💬 Abrir conversa no WhatsApp", "url": link_wa}]]
-        }
-    }
-
+    mensagem = f"🚨 *NOVO CHAMADO - VOLTDESK*\n\n👤 *Morador:* {nome}\n🏢 *Apto/Bloco:* {apto}\n🛠️ *Serviço:* {servico}\n📝 *Descrição:* {descricao}"
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
-        if caminho_foto and isinstance(caminho_foto, str) and os.path.exists(caminho_foto) and caminho_foto.lower().endswith(('.jpg', '.png', '.jpeg')):
-            url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendPhoto"
-            with open(caminho_foto, "rb") as photo_file:
-                # Timeout aumentado para 30s para fotos pesadas não darem estouro de tempo
-                requests.post(url, data={"chat_id": CHAT_ID_TELEGRAM, "caption": mensagem, "parse_mode": "HTML", "reply_markup": payload["reply_markup"]}, files={"photo": photo_file}, timeout=30)
-        else:
-            url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
-            requests.post(url, json=payload, timeout=15)
+        requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": mensagem, "parse_mode": "Markdown"}, timeout=30)
     except Exception as e:
-        # Fallback: Tenta enviar pelo menos a mensagem de texto sem a imagem caso ocorra timeout
-        try:
-            url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
-            payload_txt = payload.copy()
-            payload_txt["text"] = mensagem + "\n\n⚠️ <i>(Anexo não enviado por lentidão na conexão)</i>"
-            requests.post(url, json=payload_txt, timeout=10)
-        except:
-            pass
-        st.warning(f"Chamado salvo! Houve um aviso no Telegram: {e}")
+        print(f"Erro ao enviar notificação: {e}")
 
-# ==============================================================================
-# INTERFACE STREAMLIT
-# ==============================================================================
-aba = st.sidebar.radio("Navegação", ["Abrir Chamado ", "Painel Admin (Gestão)"])
+st.title("⚡ VoltDesk - Serviços")
 
-# ------------------------------------------------------------------------------
-# ABA 1: FORMULÁRIO DO VIZINHO
-# ------------------------------------------------------------------------------
-if aba == "Abrir Chamado ":
-    st.title("⚡️VoltDesk⚡️")
-    st.markdown("Atendimento residencial para pequenos reparos elétricos, hidráulicos e outros serviços.")
+menu = st.sidebar.radio("Navegação", ["Novo Chamado", "Área Administrativa"])
 
-    with st.form("form_chamado", clear_on_submit=True):
-        nome = st.text_input("Seu Nome*", placeholder="Ex: João Paulo")
-        bloco_apto = st.text_input("Bloco / Apartamento*", placeholder="Ex: Bloco B - Apto 204")
-        whatsapp = st.text_input("WhatsApp para Contato*", placeholder="Ex: 84 99999-9999")
-        
-        categoria = st.selectbox(
-            "Tipo de Serviço*",
-            [
-                "Elétrica (Tomadas, Chuveiro, Luminárias, Disjuntores)",
-                "Pequenos Reparos (Suporte TV, Cortinas, Montagens)",
-                "Hidráulica Leve (Reparo de Torneira, Vazamentos simples)",
-                "Outros"
-            ]
-        )
-        
-        descricao = st.text_area("Descrição do Problema*", placeholder="Explique o que precisa ser feito...")
-        foto = st.file_uploader("Anexar Foto ou Vídeo (Opcional)", type=["jpg", "png", "jpeg", "mp4"])
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            data_pref = st.selectbox("Dia Preferencial", ["Sábado", "Domingo"])
-        with col2:
-            turno_pref = st.selectbox("Turno Preferencial", ["Manhã", "Tarde"])
-            
-        submit = st.form_submit_button("🚀 Enviar Solicitação")
-
-    if submit:
-        if not nome or not bloco_apto or not whatsapp or not descricao:
-            st.error("Preencha todos os campos obrigatórios com asterisco (*).")
-        else:
-            caminho_salvo = None
-            if foto is not None:
-                filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{foto.name}"
-                caminho_salvo = os.path.join(UPLOAD_DIR, filename)
-                with open(caminho_salvo, "wb") as f:
-                    f.write(foto.getbuffer())
-
-            with get_db() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO chamados 
-                    (nome, bloco_apto, whatsapp, categoria, descricao, caminho_foto, data_preferencial, turno_preferencial)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (nome, bloco_apto, whatsapp, categoria, descricao, caminho_salvo, data_pref, turno_pref))
-                conn.commit()
-                id_gerado = cursor.lastrowid
-
-            enviar_notificacao(
-                nome=nome,
-                bloco_apto=bloco_apto,
-                whatsapp=whatsapp,
-                categoria=categoria,
-                descricao=descricao,
-                dia=data_pref,
-                turno=turno_pref,
-                id_chamado=id_gerado,
-                caminho_foto=caminho_salvo
-            )
-
-            st.success("✅ Solicitação enviada com sucesso! Em breve entrarei em contato via WhatsApp.")
-
-# ------------------------------------------------------------------------------
-# ABA 2: PAINEL DE GESTÃO DO ELETRICISTA
-# ------------------------------------------------------------------------------
-elif aba == "Painel Admin (Gestão)":
-    st.title("📋 Gestão de Chamados")
-    senha = st.sidebar.text_input("Senha de Acesso", type="password")
+if menu == "Novo Chamado":
+    st.subheader("Abertura de Chamado")
     
-    if senha == "1234":  # Altere para a senha que desejar
-        with get_db() as conn:
-            df = pd.read_sql_query("SELECT * FROM chamados ORDER BY id DESC", conn)
+    with st.form("form_chamado", clear_on_submit=True):
+        nome = st.text_input("Seu Nome *")
+        apto = st.text_input("Apartamento / Bloco *")
+        whatsapp = st.text_input("WhatsApp para Contato *")
+        servico = st.selectbox("Tipo de Serviço *", ["Elétrica (Tomadas, Chuveiro, Luminárias, Disjuntores)", "Hidráulica", "Pintura / Reparos", "Outros"])
+        descricao = st.text_area("Descrição do Problema *", placeholder="Explique o que precisa de ser feito...")
+        
+        foto_upload = st.file_uploader("Anexar Foto ou Vídeo (Opcional)", type=["jpg", "jpeg", "png", "mp4"])
+        
+        dia_pref = st.selectbox("Dia Preferencial", ["Qualquer dia", "Segunda a Sexta", "Sábado", "Domingo"])
+        turno_pref = st.selectbox("Turno Preferencial", ["Qualquer turno", "Manhã", "Tarde", "Noite"])
+        
+        submitted = st.form_submit_button("🚀 Enviar Solicitação")
+        
+        if submitted:
+            if not nome or not apto or not whatsapp or not descricao:
+                st.error("Por favor, preencha todos os campos obrigatórios (*).")
+            else:
+                caminho_foto = None
+                if foto_upload is not None:
+                    try:
+                        caminho_foto = os.path.join(UPLOADS_DIR, foto_upload.name)
+                        with open(caminho_foto, "wb") as f:
+                            f.write(foto_upload.getbuffer())
+                    except Exception as e:
+                        st.warning(f"Aviso: Não foi possível guardar o anexo, mas o chamado será registado.")
+                        caminho_foto = None
 
-        if df.empty:
-            st.info("Nenhum chamado registrado até o momento.")
-        else:
-            st.metric("Total de Chamados", len(df))
-            st.divider()
-
-            # Controle de Alteração de Status
-            lista_ids = df['id'].tolist()
-            col_id, col_st, col_bt = st.columns([1, 2, 1])
-            
-            with col_id:
-                ch_id = st.selectbox("ID do Chamado", options=lista_ids)
-            
-            # Pega o status atual do ID selecionado para preencher o selectbox automaticamente
-            status_atual = df.loc[df['id'] == ch_id, 'status'].values[0]
-            opcoes_status = ["Pendente", "Em Orçamento", "Agendado", "Concluído", "Cancelado"]
-            index_atual = opcoes_status.index(status_atual) if status_atual in opcoes_status else 0
-
-            with col_st:
-                st_novo = st.selectbox("Novo Status", opcoes_status, index=index_atual)
-            
-            with col_bt:
-                st.write("")
-                if st.button("Atualizar"):
-                    with get_db() as conn:
-                        conn.execute("UPDATE chamados SET status = ? WHERE id = ?", (st_novo, ch_id))
-                        conn.commit()
-                    st.success(f"Status do Chamado #{ch_id} atualizado para {st_novo}!")
-                    st.rerun()
-
-            st.subheader("Lista de Solicitações")
-            for _, row in df.iterrows():
-                # Define a bolinha de cor do farol conforme o status
-                emoji_farol = FAROL_STATUS.get(row['status'], "⚫")
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                c.execute('''
+                    INSERT INTO chamados (nome, apto, whatsapp, servico, descricao, dia_pref, turno_pref, foto)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (nome, apto, whatsapp, servico, descricao, dia_pref, turno_pref, caminho_foto))
+                conn.commit()
+                conn.close()
                 
-                with st.expander(f"{emoji_farol} ID #{row['id']} - {row['nome']} ({row['bloco_apto']}) - {row['status']}"):
+                enviar_notificacao_telegram(nome, apto, servico, descricao)
+                st.success("✅ Solicitação enviada com sucesso! Em breve entrarei em contato via WhatsApp.")
+
+elif menu == "Área Administrativa":
+    st.subheader("Painel Administrativo")
+    senha = st.text_input("Senha de Acesso", type="password")
+    
+    if senha == "1234":
+        conn = sqlite3.connect(DB_FILE)
+        df = pd.read_sql_query("SELECT * FROM chamados ORDER BY id DESC", conn)
+        conn.close()
+        
+        if df.empty:
+            st.info("Nenhum chamado registado até o momento.")
+        else:
+            for index, row in df.iterrows():
+                with st.expander(f"{row['status']} - {row['servico']} ({row['nome']} - Apto {row['apto']})"):
+                    st.write(f"**Morador:** {row['nome']}")
+                    st.write(f"**Apto:** {row['apto']}")
                     st.write(f"**WhatsApp:** {row['whatsapp']}")
-                    st.write(f"**Categoria:** {row['categoria']}")
                     st.write(f"**Descrição:** {row['descricao']}")
-                    st.write(f"**Data/Turno:** {row['data_preferencial']} - {row['turno_preferencial']}")
-                    st.write(f"**Solicitado em:** {row['criado_em']}")
+                    st.write(f"**Preferência:** {row['dia_pref']} - {row['turno_pref']}")
                     
-                    caminho_foto = row['caminho_foto']
-                    if pd.notna(caminho_foto) and str(caminho_foto).strip() != "":
-                        caminho_str = str(caminho_foto)
-                        if os.path.exists(caminho_str):
-                            if caminho_str.lower().endswith(('.mp4', '.mov')):
-                                st.video(caminho_str)
-                            else:
-                                st.image(caminho_str, width=300)
-    else:
-        st.warning("Digite a senha de administrador na barra lateral para acessar a lista de chamados.")
+                    if row['foto'] and os.path.exists(str(row['foto'])):
+                        if str(row['foto']).lower().endswith(('.png', '.jpg', '.jpeg')):
+                            st.image(row['foto'], width=300)
+                        elif str(row['foto']).lower().endswith('.mp4'):
+                            st.video(row['foto'])
+                    
+                    novo_status = st.selectbox(
+                        "Alterar Status",
+                        ["⚫ Pendente", "🔵 Em Orçamento", "🟡 Agendado", "🟢 Concluído", "🔴 Cancelado"],
+                        index=["⚫ Pendente", "🔵 Em Orçamento", "🟡 Agendado", "🟢 Concluído", "🔴 Cancelado"].index(row['status']) if row['status'] in ["⚫ Pendente", "🔵 Em Orçamento", "🟡 Agendado", "🟢 Concluído", "🔴 Cancelado"] else 0,
+                        key=f"status_{row['id']}"
+                    )
+                    
+                    if st.button("Atualizar Status", key=f"btn_{row['id']}"):
+                        conn = sqlite3.connect(DB_FILE)
+                        c = conn.cursor()
+                        c.execute("UPDATE chamados SET status = ? WHERE id = ?", (novo_status, row['id']))
+                        conn.commit()
+                        conn.close()
+                        st.success("Status atualizado!")
+                        st.rerun()
