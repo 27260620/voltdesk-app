@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import json
 import pandas as pd
 import requests
 import streamlit as st
@@ -13,8 +14,11 @@ st.set_page_config(page_title="VoltDesk", page_icon="⚡️", layout="centered")
 TOKEN_TELEGRAM = "8972769309:AAG5Gf58EORFvPJ2J050onWJXSBKdyv-pPM"
 CHAT_ID_TELEGRAM = "8690664380"
 
-UPLOAD_DIR = "uploads"
-DB_FILE = "chamados.db"
+# Garante o caminho absoluto da pasta uploads para evitar erros de permissão na nuvem
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+DB_FILE = os.path.join(BASE_DIR, "chamados.db")
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ==============================================================================
@@ -59,8 +63,7 @@ init_db()
 # FUNÇÃO DE NOTIFICAÇÃO EM TEMPO REAL (TELEGRAM)
 # ==============================================================================
 def enviar_notificacao(nome, bloco_apto, whatsapp, categoria, descricao, dia, turno, id_chamado, caminho_foto=None):
-    if TOKEN_TELEGRAM == "SEU_TOKEN_DO_BOTFATHER_AQUI":
-        st.info("ℹ️ Para receber alertas no Telegram, preencha o TOKEN e CHAT_ID no código.")
+    if not TOKEN_TELEGRAM or TOKEN_TELEGRAM == "SEU_TOKEN_DO_BOTFATHER_AQUI":
         return
 
     num_limpo = "".join(filter(str.isdigit, whatsapp))
@@ -81,33 +84,47 @@ def enviar_notificacao(nome, bloco_apto, whatsapp, categoria, descricao, dia, tu
 <i>{descricao}</i>
 """
 
-    payload = {
-        "chat_id": CHAT_ID_TELEGRAM,
-        "caption": mensagem,
-        "text": mensagem,
-        "parse_mode": "HTML",
-        "reply_markup": {
-            "inline_keyboard": [[{"text": "💬 Abrir conversa no WhatsApp", "url": link_wa}]]
-        }
-    }
+    reply_markup = json.dumps({
+        "inline_keyboard": [[{"text": "💬 Abrir conversa no WhatsApp", "url": link_wa}]]
+    })
 
-    try:
-        if caminho_foto and isinstance(caminho_foto, str) and os.path.exists(caminho_foto) and caminho_foto.lower().endswith(('.jpg', '.png', '.jpeg')):
-            url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendPhoto"
-            with open(caminho_foto, "rb") as photo_file:
-                requests.post(url, data={"chat_id": CHAT_ID_TELEGRAM, "caption": mensagem, "parse_mode": "HTML", "reply_markup": requests.compat.json.dumps(payload["reply_markup"])}, files={"photo": photo_file}, timeout=30)
-        else:
-            url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
-            requests.post(url, json=payload, timeout=15)
-    except Exception as e:
+    # Tenta enviar primeiro a foto/anexo se existir
+    sucesso_envio = False
+    if caminho_foto and isinstance(caminho_foto, str) and os.path.exists(caminho_foto):
+        ext = caminho_foto.lower()
+        if ext.endswith(('.jpg', '.png', '.jpeg')):
+            try:
+                url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendPhoto"
+                with open(caminho_foto, "rb") as photo_file:
+                    res = requests.post(
+                        url,
+                        data={
+                            "chat_id": CHAT_ID_TELEGRAM,
+                            "caption": mensagem,
+                            "parse_mode": "HTML",
+                            "reply_markup": reply_markup
+                        },
+                        files={"photo": photo_file},
+                        timeout=25
+                    )
+                    if res.status_code == 200:
+                        sucesso_envio = True
+            except Exception:
+                sucesso_envio = False
+
+    # Se não houver foto ou se o envio da foto falhar, envia como mensagem simples de texto
+    if not sucesso_envio:
         try:
             url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
-            payload_txt = payload.copy()
-            payload_txt["text"] = mensagem + "\n\n⚠️ <i>(Anexo não enviado por lentidão na conexão)</i>"
-            requests.post(url, json=payload_txt, timeout=10)
-        except:
-            pass
-        st.warning(f"Chamado salvo! Houve um aviso no Telegram: {e}")
+            payload = {
+                "chat_id": CHAT_ID_TELEGRAM,
+                "text": mensagem,
+                "parse_mode": "HTML",
+                "reply_markup": json.loads(reply_markup)
+            }
+            requests.post(url, json=payload, timeout=15)
+        except Exception as e:
+            st.warning(f"Chamado registrado no sistema, porém o alerta do Telegram teve um aviso: {e}")
 
 # ==============================================================================
 # INTERFACE STREAMLIT
@@ -153,10 +170,18 @@ if aba == "Abrir Chamado ":
         else:
             caminho_salvo = None
             if foto is not None:
-                filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{foto.name}"
-                caminho_salvo = os.path.join(UPLOAD_DIR, filename)
-                with open(caminho_salvo, "wb") as f:
-                    f.write(foto.getbuffer())
+                try:
+                    # Nome único com timestamp para evitar conflitos de arquivos com nomes iguais
+                    nome_limpo = "".join([c for c in foto.name if c.isalnum() or c in (".", "_", "-")])
+                    filename = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{nome_limpo}"
+                    caminho_salvo = os.path.join(UPLOAD_DIR, filename)
+                    
+                    # Gravação do arquivo em disco/servidor
+                    with open(caminho_salvo, "wb") as f:
+                        f.write(foto.getbuffer())
+                except Exception as e:
+                    st.error(f"Erro ao salvar arquivo de mídia: {e}")
+                    caminho_salvo = None
 
             with get_db() as conn:
                 cursor = conn.cursor()
