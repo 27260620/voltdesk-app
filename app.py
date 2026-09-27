@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import json
+import io
 import pandas as pd
 import requests
 import streamlit as st
@@ -64,7 +65,7 @@ init_db()
 # ==============================================================================
 def otimizar_e_salvar_imagem(file_uploader_object, upload_dir):
     """
-    Comprime fotos tiradas por smartphones para evitar falha de memória RAM no navegador.
+    Comprime fotos enviadas de celulares externos para evitar erro de memória/timeout.
     """
     try:
         os.makedirs(upload_dir, exist_ok=True)
@@ -75,15 +76,19 @@ def otimizar_e_salvar_imagem(file_uploader_object, upload_dir):
         if file_uploader_object.name.lower().endswith(('.mp4', '.mov')):
             caminho_video = os.path.join(upload_dir, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file_uploader_object.name}")
             with open(caminho_video, "wb") as f:
-                f.write(file_uploader_object.getbuffer())
+                f.write(file_uploader_object.getvalue())
             return caminho_video
 
-        # Redimensiona e comprime a foto
-        img = Image.open(file_uploader_object)
+        # Lê os bytes diretamente para evitar travamento de buffer no celular
+        bytes_data = file_uploader_object.getvalue()
+        image_stream = io.BytesIO(bytes_data)
+
+        # Abre e converte a foto
+        img = Image.open(image_stream)
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
 
-        # Redimensiona mantendo a proporção (largura máxima de 1280px)
+        # Redimensiona mantendo a proporção (máximo 1280px) e salva comprimida
         img.thumbnail((1280, 1280))
         img.save(caminho_final, "JPEG", quality=75, optimize=True)
         
