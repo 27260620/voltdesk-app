@@ -9,7 +9,7 @@ from datetime import datetime
 from PIL import Image
 
 # ==============================================================================
-# CONFIGURAÇÕES INICIAIS & CREDENCIAIS
+# CONFIGURAÇÕES INICIAIS & CREDENCIAIS.
 # ==============================================================================
 st.set_page_config(page_title="VoltDesk", page_icon="⚡️", layout="centered")
 
